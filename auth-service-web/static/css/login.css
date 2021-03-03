@@ -1,0 +1,26 @@
+
+.container {
+    margin-top: 20vh;
+}
+
+.login-card {
+    padding: 20px;
+    box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2), 0 6px 20px 0 rgba(0, 0, 0, 0.19);
+}
+
+.login-txt {
+    text-align: center;
+    font-size: xx-large;
+    font-family: cursive;
+}
+
+.error-p, .error-ul {
+    color: red;
+    color: var(--danger);
+}
+.error-p {
+    margin-top: 1rem;
+}
+.error-ul {
+    margin-bottom: 2rem;
+}
