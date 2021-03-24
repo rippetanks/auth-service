@@ -23,38 +23,20 @@ struct AuthJSON<'a> {
 }
 
 #[post("/", data = "<json>", format = "application/json")]
-fn create(conn: AuthServiceDB, json: Json<AuthJSON>) -> Result<Status, Status> {
+fn create(conn: AuthServiceDB, json: Json<AuthJSON>) -> Status {
     debug!("create_users");
     let user = User::read_by_email(json.email, &conn);
     user.map_or_else(|e| {
         if e.eq(&Error::NotFound) {
             debug!("user not present");
-            crypto::hash_pwd(json.password)
-                .map_or_else(|| Err(Status::InternalServerError), |h| {
-                    let form = UserForm {
-                        email: json.email.to_string(),
-                        password: h,
-                        algorithm: "scrypt".to_string(),
-                        last_login: None
-                    };
-                    match User::create(&form, &conn) {
-                        Ok(user) => {
-                            info!("user created successfully (id = {})", user.id);
-                            Ok(Status::NoContent)
-                        },
-                        Err(e) => {
-                            error!("can not create user caused by {}", e);
-                            Err(Status::InternalServerError)
-                        }
-                    }
-                })
+            do_create(&conn, &json)
         } else {
             error!("can not read user: {}", e);
-            Err(Status::InternalServerError)
+            Status::InternalServerError
         }
     }, |_| {
         info!("user already present");
-        Err(Status::BadRequest)
+        Status::BadRequest
     })
 }
 
@@ -156,6 +138,9 @@ fn login(conn: AuthServiceDB, json: Json<AuthJSON>, extras: State<Extras>) -> Re
             let encoding_key = EncodingKey::from_secret(extras.jwt_key.as_ref());
             let token = encode(&header, &claims, &encoding_key);
             if token.is_ok() {
+                if User::update_last_login(user.id, &conn).is_err() {
+                    error!("can not update last login of user {}", user.id);
+                }
                 Ok(json!({"token": token.unwrap()}).to_string())
             } else {
                 Err(Status::InternalServerError)
@@ -178,6 +163,28 @@ fn login(conn: AuthServiceDB, json: Json<AuthJSON>, extras: State<Extras>) -> Re
 
 pub fn mount(rocket: rocket::Rocket) -> rocket::Rocket {
     rocket.mount("/users", routes![create, read_me, read_one, update, update_me, delete, delete_me, login])
+}
+
+fn do_create(conn: &AuthServiceDB, json: &AuthJSON) -> Status {
+    crypto::hash_pwd(json.password)
+        .map_or_else(|| Status::InternalServerError, |h| {
+            let form = UserForm {
+                email: json.email.to_string(),
+                password: h,
+                algorithm: "scrypt".to_string(),
+                last_login: None
+            };
+            match User::create(&form, &conn) {
+                Ok(user) => {
+                    info!("user created successfully (id = {})", user.id);
+                    Status::NoContent
+                },
+                Err(e) => {
+                    error!("can not create user caused by {}", e);
+                    Status::InternalServerError
+                }
+            }
+        })
 }
 
 fn do_update(conn: &AuthServiceDB, user: &User, json: &AuthJSON) -> Status {

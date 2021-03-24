@@ -83,7 +83,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for AuthToken {
     type Error = AuthTokenError;
 
     fn from_request(request: &'a Request<'r>) -> Outcome<AuthToken, Self::Error> {
-        let keys: Vec<_> = request.headers().get("Authentication").collect();
+        let keys: Vec<_> = request.headers().get("Authorization").collect();
         let extra = request.guard::<State<Extras>>().unwrap();
         match keys.len() {
             0 => {

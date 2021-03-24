@@ -18,9 +18,6 @@ mod web;
 mod users;
 
 fn main() {
-    // Verifying a stored password
-    //assert!(scrypt_check("Not so secure password", &hashed_password).is_ok());
-
     let path = if cfg!(windows) {
         "log-config.yml"
     } else {

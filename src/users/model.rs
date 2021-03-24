@@ -7,8 +7,8 @@ use serde::{Serialize, Deserialize};
 use crate::database::AuthServiceDB;
 use crate::schema::users;
 
-#[table_name = "users"]
 #[derive(Debug,Serialize,Deserialize,Queryable,Identifiable,Associations)]
+#[table_name = "users"]
 pub struct User {
     pub id: i64,
     pub email: String,
@@ -17,8 +17,8 @@ pub struct User {
     pub last_login: Option<DateTime<Utc>>
 }
 
-#[table_name = "users"]
 #[derive(Debug,Insertable,AsChangeset)]
+#[table_name = "users"]
 pub struct UserForm {
     pub email: String,
     pub password: String,
