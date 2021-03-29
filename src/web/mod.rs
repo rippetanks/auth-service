@@ -6,11 +6,12 @@ use rocket::response::status::NotFound;
 use rocket::State;
 use std::collections::HashMap;
 
-use crate::controller::Extras;
+use crate::controller::{Extras, Prefix};
 
 #[get("/login")]
-fn login() -> Template {
-    let context: HashMap<String, String> = HashMap::new();
+fn login(prefix: Prefix) -> Template {
+    let mut context: HashMap<String, String> = HashMap::new();
+    context.insert("prefix".to_string(), prefix.prefix);
     Template::render("login", &context)
 }
 

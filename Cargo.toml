@@ -1,6 +1,6 @@
 [package]
 name = "auth_service"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["rippetanks <simone.martelli.98@gmail.com>"]
 edition = "2018"
 

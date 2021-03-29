@@ -28,6 +28,11 @@ pub struct AuthToken {
 }
 
 #[derive(Debug)]
+pub struct Prefix {
+    pub prefix: String
+}
+
+#[derive(Debug)]
 pub enum AuthTokenError {
     BadCount,
     Missing,
@@ -75,6 +80,35 @@ fn read_token(header: &str, secret: &String) -> Result<AuthToken, String> {
         Err(e) => {
             error!("token invalid {}", e);
             Err("Token not valid!".to_string())
+        }
+    }
+}
+
+impl<'a, 'r> FromRequest<'a, 'r> for Prefix {
+    type Error = ();
+
+    fn from_request(request: &'a Request<'r>) -> Outcome<Prefix, Self::Error> {
+        let values: Vec<_> = request.headers().get("X-Forwarded-Prefix").collect();
+        match values.len() {
+            0 => {
+                info!("prefix header: None");
+                Outcome::Success(Prefix {
+                    prefix: "".to_string()
+                })
+            }
+            1 => {
+                let str = values[0].to_string();
+                info!("prefix header: {}", str);
+                Outcome::Success(Prefix {
+                    prefix: str
+                })
+            }
+            _ => {
+                warn!("prefix header: too many");
+                Outcome::Success(Prefix {
+                    prefix: "".to_string()
+                })
+            }
         }
     }
 }
