@@ -1,4 +1,4 @@
-
+/*
 use rand_core::OsRng;
 use scrypt::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -28,3 +28,4 @@ pub fn hash_check(pwd: &str, hash: &str) -> bool {
         _ => false
     }
 }
+*/

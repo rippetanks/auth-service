@@ -1,11 +1,18 @@
-
-[global]
+[default]
 template_dir = "auth-service-web/templates/"
 static_dir = "auth-service-web/static/"
 
-[development]
+[default.limits]
+
+[default.tls]
+
+[default.shutdown]
+
+[debug]
 jwt_key = "dev_key"
 jwt_exp = 86400
 
-[development.databases]
-db = { url = "postgres://postgres:postgres@localhost:5432/auth_service" }
+[release]
+
+#[development.databases]
+#db = { url = "postgres://postgres:postgres@localhost:5432/auth_service" }

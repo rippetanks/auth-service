@@ -1,4 +1,4 @@
-table! {
+/*table! {
     users (id) {
         id -> Int8,
         email -> Varchar,
@@ -6,4 +6,4 @@ table! {
         algorithm -> Varchar,
         last_login -> Nullable<Timestamptz>,
     }
-}
+}*/

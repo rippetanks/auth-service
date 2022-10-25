@@ -1,11 +1,11 @@
+//use rocket::http::Status;
+//use rocket::response::status::Custom;
+//use diesel::result::Error;
+//use rocket::serde::json::Json;
 
-use rocket_contrib::json::Json;
-use rocket::http::Status;
-use rocket::response::status::Custom;
-use diesel::result::Error;
+// use crate::users::model::User;
 
-use crate::users::model::User;
-
+/*
 pub trait BaseModel<T> {
     fn unpack(result: Result<Vec<T>, Error>) -> Result<Json<Vec<T>>, Custom<String>> {
         match result {
@@ -21,5 +21,6 @@ pub trait BaseModel<T> {
         }
     }
 }
+*/
 
-impl BaseModel<User> for User { }
+// impl BaseModel<User> for User { }
