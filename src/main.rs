@@ -6,15 +6,20 @@
 use std::path::Path;
 use rocket::fairing::AdHoc;
 use rocket::serde::{Deserialize, Serialize};
+use rocket::serde::json::Json;
 use rocket::State;
+use rocket_db_pools::{Connection, Database};
+use uuid::Uuid;
+use crate::database::AuthDB;
+use crate::users::dto::UserDTO;
+use crate::users::model::{User, UserForm};
 
 //mod controller;
 //mod base_model;
-//mod database;
-//mod schema;
+mod database;
 
 //mod web;
-//mod users;
+mod users;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
@@ -39,21 +44,34 @@ async fn main() -> Result<(), rocket::Error> {
     };
     log4rs::init_file(path, Default::default()).unwrap();
 
-    let _rocket = rocket::build();
-    let figment = _rocket.figment();
+    let my_rocket = rocket::build();
 
+    let figment = my_rocket.figment();
     let config: Config = figment.extract().expect("config");
     info!("CONFIG: {:?}", config);
 
-    let _ = _rocket.mount("/test", routes!(test))
+    let _ = my_rocket.mount("/test", routes!(test))
         .attach(AdHoc::config::<Config>())
+        .attach(AuthDB::init())
         .launch()
         .await?;
     Ok(())
 }
 
 #[get("/")]
-async fn test(config: &State<Config>) -> &'static str {
+async fn test(config: &State<Config>, mut conn: Connection<AuthDB>) -> Json<UserDTO> {
     info!("CONFIG: {:?}", config);
-    "Test"
+
+    info!("TEST DB: {:?}", User::find_all(&mut conn).await);
+    info!("TEST DB: {:?}", User::find_by_id(1, &mut conn).await);
+
+    let form = UserForm {
+        email: Uuid::new_v4().to_string(),
+        password: "".to_string(),
+        algorithm: "".to_string(),
+        last_login: None
+    };
+    info!("INSERT: {:?}", User::insert(&form, &mut conn).await);
+
+    Json(User::find_by_id(1, &mut conn).await.into())
 }

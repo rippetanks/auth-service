@@ -12,7 +12,7 @@ static_dir = "auth-service-web/static/"
 jwt_key = "dev_key"
 jwt_exp = 86400
 
-[release]
+[debug.databases.auth_db]
+url = "postgres://postgres:postgres@localhost:5432/auth_db"
 
-#[development.databases]
-#db = { url = "postgres://postgres:postgres@localhost:5432/auth_service" }
+[release]

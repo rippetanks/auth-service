@@ -1,6 +1,5 @@
-/*
-use rocket_sync_db_pools::{database, diesel};
+use rocket_db_pools::{deadpool_postgres, Database};
 
-#[database("db")]
-pub struct AuthServiceDB(diesel::PgConnection);
-*/
+#[derive(Database)]
+#[database("auth_db")]
+pub struct AuthDB(deadpool_postgres::Pool);
