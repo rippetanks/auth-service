@@ -1,18 +1,15 @@
-/*
 use rand_core::OsRng;
-use scrypt::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Scrypt, Params
-};
+use scrypt::{Params, Scrypt};
+use scrypt::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
 pub fn hash_pwd(pwd: &str) -> Option<String> {
     let params = Params::recommended();
     let salt = SaltString::generate(&mut OsRng);
-    let hashed_password = Scrypt.hash_password(pwd.as_bytes(),
-                                               Some(scrypt::ALG_ID),
-                                               None,
-                                               params,
-                                               salt.as_salt());
+    let hashed_password = Scrypt.hash_password_customized(pwd.as_bytes(),
+                                                          Some(scrypt::ALG_ID),
+                                                          None,
+                                                          params,
+                                                          salt.as_salt());
     if hashed_password.is_err() {
         error!("can not hash password: {}", hashed_password.unwrap_err());
         None
@@ -28,4 +25,3 @@ pub fn hash_check(pwd: &str, hash: &str) -> bool {
         _ => false
     }
 }
-*/
