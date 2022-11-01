@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use rocket::{Build, State};
 use rocket::fs::NamedFile;
 use rocket_dyn_templates::{context, Template};
-use crate::{Config, Prefix};
+use crate::config::Config;
+use crate::controller::Prefix;
 
 #[get("/login")]
 fn login(prefix: Prefix) -> Template {

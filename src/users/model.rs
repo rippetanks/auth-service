@@ -36,6 +36,7 @@ impl User {
             e
         })
     }
+    #[allow(dead_code)]
     pub async fn find_all(conn: &mut Connection<AuthDB>) -> Result<Vec<User>, Error> {
         let stmt = (&mut *conn).prepare("SELECT * FROM users").await.unwrap();
         let res: Result<Vec<Row>, Error> = (&mut *conn).query(&stmt, &[]).await;

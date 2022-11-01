@@ -6,7 +6,8 @@ use rocket::serde::Deserialize;
 use rocket::serde::json::Json;
 use rocket::serde::json::serde_json::json;
 use rocket_db_pools::Connection;
-use crate::{AuthToken, Config};
+use crate::config::Config;
+use crate::controller::AuthToken;
 use crate::database::AuthDB;
 use crate::users::model::User;
 
