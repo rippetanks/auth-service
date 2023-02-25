@@ -50,7 +50,7 @@ $(document).ready(function() {
 
 function doLogin() {
     $.ajax({
-        url: '/users/login',
+        url: '/auth/login',
         type: 'post',
         dataType: 'json',
         headers: {
