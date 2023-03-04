@@ -3,7 +3,7 @@ use rocket::fairing::AdHoc;
 use rocket::serde::{Deserialize, Serialize};
 use rocket_db_pools::Database;
 use rocket_dyn_templates::Template;
-use crate::{auth, users, web};
+use crate::{auth, oauth, users, web};
 use crate::config::Config;
 use crate::database::AuthDB;
 
@@ -40,6 +40,7 @@ pub async fn start_rocket() -> Result<(), rocket::Error> {
     my_rocket = web::mount(my_rocket);
     my_rocket = users::mount(my_rocket);
     my_rocket = auth::mount(my_rocket);
+    my_rocket = oauth::mount(my_rocket);
     let _ = my_rocket
         .attach(AdHoc::config::<Config>())
         .attach(AuthDB::init())

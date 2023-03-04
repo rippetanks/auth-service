@@ -30,7 +30,7 @@ async fn login(mut conn: Connection<AuthDB>, config: &State<Config>, json: Json<
     match res {
         Ok(opt) => {
             match opt {
-                Some(user) if crypto::hash_check(json.password, user.password.as_str()) => {
+                Some(user) if crypto::hash_pwd_check(json.password, user.password.as_str()) => {
                     let header = Header::new(Algorithm::HS512);
                     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
                     let claims = AuthToken {

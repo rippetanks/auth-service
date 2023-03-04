@@ -25,4 +25,40 @@
         </createTable>
     </changeSet>
 
+    <changeSet id="2" author="Simone Martelli">
+        <comment>OAuth2 Client Credentials</comment>
+        <sql>CREATE TYPE oauth_credential_status AS ENUM ('ACTIVE', 'SUSPENDED', 'REVOKED', 'EXPIRED');</sql>
+        <createTable tableName="oauth_credentials">
+            <column name="id" type="bigserial" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="user_id" type="bigint">
+                <constraints nullable="false" references="users(id)" foreignKeyName="fk_oauth_credentials_users"/>
+            </column>
+            <column name="client_id" type="character(36)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="oauth_credentials_client_id_constraint_unique"/>
+            </column>
+            <column name="client_secret" type="character(96)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="algorithm" type="character varying(8)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="oauth_credential_status">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_used" type="timestamp with time zone"/>
+            <column name="expire_at" type="timestamp with time zone"/>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version" type="int" defaultValue="0">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
 </databaseChangeLog>

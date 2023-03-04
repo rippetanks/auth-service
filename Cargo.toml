@@ -8,6 +8,7 @@ edition = "2021"
 rocket = { version = "0.5.0-rc.2", features = ["json"] }
 deadpool-postgres = "0.10.2"
 tokio-postgres = { version = "0.7.7", features = ["with-chrono-0_4"] }
+postgres-types = { version = "0.2.4", features = ["derive"] }
 chrono = { version = "0.4.22", features = ["serde"] }
 uuid = { version = "1.2.1", features = ["v4"] }
 jsonwebtoken = "8.1.1"
@@ -15,6 +16,8 @@ rand_core = "0.6.1"
 scrypt = "0.10.0"
 log4rs = "1.0.0"
 log = "0.4.14"
+base64 = "0.21.0"
+argon2 = "0.4.1"
 
 [dependencies.rocket_db_pools]
 version = "0.1.0-rc.2"

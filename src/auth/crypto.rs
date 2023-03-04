@@ -1,4 +1,6 @@
-use rand_core::OsRng;
+use argon2::Argon2;
+use base64::Engine;
+use rand_core::{OsRng, RngCore};
 use scrypt::{Params, Scrypt};
 use scrypt::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
@@ -18,10 +20,38 @@ pub fn hash_pwd(pwd: &str) -> Option<String> {
     }
 }
 
-pub fn hash_check(pwd: &str, hash: &str) -> bool {
+pub fn hash_secret(secret: &str) -> Option<String> {
+    let argon2 = Argon2::default();
+    let salt = SaltString::generate(&mut OsRng);
+    let hashed_secret = argon2.hash_password(secret.as_bytes(), &salt);
+    if hashed_secret.is_err() {
+        error!("can not hash secret: {}", hashed_secret.unwrap_err());
+        None
+    } else {
+        Some(hashed_secret.unwrap().to_string())
+    }
+}
+
+pub fn hash_pwd_check(pwd: &str, hash: &str) -> bool {
     let parsed_hash = PasswordHash::new(&hash);
     match parsed_hash {
         Ok(pwd_hash) if Scrypt.verify_password(pwd.as_bytes(), &pwd_hash).is_ok() => true,
         _ => false
     }
+}
+
+pub fn hash_secret_check(secret: &str, hash: &str) -> bool {
+    let argon2 = Argon2::default();
+    let parsed_hash = PasswordHash::new(&hash);
+    match parsed_hash {
+        Ok(secret_hash) if argon2.verify_password(secret.as_bytes(), &secret_hash).is_ok() => true,
+        _ => false
+    }
+}
+
+pub fn generate_secure_secret() -> String {
+    let mut secret = [0u8; 32];
+    OsRng.fill_bytes(&mut secret);
+    let engine = base64::engine::general_purpose::STANDARD;
+    engine.encode(secret)
 }
