@@ -11,6 +11,8 @@ static_dir = "auth-service-web/static/"
 [debug]
 jwt_key = "dev_key"
 jwt_exp = 86400
+oauth_jwt_exp = 300
+oauth_jwt_sign_key_path = "./secrets/ecdsa-pkcs8-private.dev.pem"
 
 [debug.databases.auth_db]
 url = "postgres://postgres:postgres@localhost:5432/auth_db"

@@ -193,12 +193,9 @@ async fn update_status_by_id(conn: &mut Connection<AuthDB>, id: i64, user: &User
 }
 
 fn check_status_for_update(credential: &OAuthCredential, new_status: OAuthCredentialStatus) -> bool {
-    if credential.expire_at.is_some() && new_status != OAuthCredentialStatus::EXPIRED {
-        let now = Utc::now();
-        if now >= credential.expire_at.unwrap() {
-            error!("can not update credential {} status - is expired", credential.id);
-            return false;
-        }
+    if credential.expire_at.is_some() && new_status != OAuthCredentialStatus::EXPIRED && Utc::now() >= credential.expire_at.unwrap() {
+        error!("can not update credential {} status - is expired", credential.id);
+        return false;
     }
     if new_status == OAuthCredentialStatus::SUSPENDED && credential.status != OAuthCredentialStatus::ACTIVE {
         error!("can not update credential {} status from {:?} to {:?}", credential.id, credential.status, new_status);

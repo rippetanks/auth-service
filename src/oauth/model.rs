@@ -75,11 +75,11 @@ impl OAuthCredential {
             e
         })
     }
-    pub async fn find_by_client_id(client_id: &str, conn: &mut Connection<AuthDB>) -> Result<Option<OAuthCredential>, Error> {
+    pub async fn find_by_client_id(client_id: &String, conn: &mut Connection<AuthDB>) -> Result<Option<OAuthCredential>, Error> {
         let stmt = (&mut *conn).prepare("\
         SELECT * FROM oauth_credentials WHERE client_id = $1"
         ).await.unwrap();
-        let res: Result<Option<Row>, Error> = (&mut *conn).query_opt(&stmt, &[&client_id]).await;
+        let res: Result<Option<Row>, Error> = (&mut *conn).query_opt(&stmt, &[client_id]).await;
         res.map(|opt| opt.map(|row| row.into())).map_err(|e| {
             warn!("{}", e);
             e

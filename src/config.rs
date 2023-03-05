@@ -6,6 +6,8 @@ use rocket::serde::{Deserialize, Serialize};
 pub struct Config {
     pub jwt_key: String,
     pub jwt_exp: u64,
+    pub oauth_jwt_exp: u64,
+    pub oauth_jwt_sign_key_path: String,
     pub template_dir: String,
     pub static_dir: String
 }
