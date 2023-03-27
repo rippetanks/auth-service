@@ -61,4 +61,28 @@
         </createTable>
     </changeSet>
 
+    <changeSet id="3" author="Simone Martelli">
+        <comment>OAuth2 Client Apps</comment>
+        <createTable tableName="oauth_apps">
+            <column name="id" type="bigserial" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="client_id" type="character(36)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="oauth_apps_client_id_constraint_unique"/>
+            </column>
+            <column name="redirect_uri" type="text">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_by" type="bigint">
+                <constraints nullable="false" references="users(id)" foreignKeyName="fk_oauth_apps_users"/>
+            </column>
+        </createTable>
+    </changeSet>
+
 </databaseChangeLog>

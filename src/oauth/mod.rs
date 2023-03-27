@@ -13,10 +13,12 @@ use crate::users::model::User;
 
 pub mod model;
 pub mod dto;
+mod apps;
 
 pub fn mount(rocket: rocket::Rocket<Build>) -> rocket::Rocket<Build> {
     rocket.mount("/oauth", routes![get_by_user, get_by_id, create, update,
         activate, suspend, revoke, delete])
+        .mount("/oauth/apps", apps::get_routes())
 }
 
 #[post("/", data = "<dto>", format = "application/json")]
