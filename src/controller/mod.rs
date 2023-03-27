@@ -5,7 +5,7 @@ use rocket_db_pools::Database;
 use rocket_dyn_templates::Template;
 use crate::{auth, oauth, users, web};
 use crate::config::Config;
-use crate::database::AuthDB;
+use crate::database::{AuthDB, OAuthCodeDB, OAuthRefreshDB};
 
 mod outcome;
 
@@ -27,7 +27,9 @@ pub enum AuthTokenError {
 pub struct AuthToken {
     pub sub: i64,
     pub exp: usize,
-    pub iat: usize
+    pub iat: usize,
+    pub iss: String,
+    pub jti: String,
 }
 
 pub async fn start_rocket() -> Result<(), rocket::Error> {
@@ -44,6 +46,8 @@ pub async fn start_rocket() -> Result<(), rocket::Error> {
     let _ = my_rocket
         .attach(AdHoc::config::<Config>())
         .attach(AuthDB::init())
+        .attach(OAuthCodeDB::init())
+        .attach(OAuthRefreshDB::init())
         .attach(Template::fairing())
         .launch()
         .await?;

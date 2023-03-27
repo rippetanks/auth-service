@@ -55,3 +55,10 @@ pub fn generate_secure_secret() -> String {
     let engine = base64::engine::general_purpose::STANDARD;
     engine.encode(secret)
 }
+
+pub fn generate_secure_code() -> String {
+    let mut code = [0u8; 16];
+    OsRng.fill_bytes(&mut code);
+    let engine = base64::engine::general_purpose::STANDARD;
+    engine.encode(code)
+}
