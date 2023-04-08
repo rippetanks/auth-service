@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use deadpool_postgres::tokio_postgres::Row;
 use postgres_types::{FromSql, ToSql};
@@ -84,7 +85,7 @@ pub struct OAuthCode {
 #[derive(Debug)]
 pub struct OAuthRefresh {
     pub client_id: String,
-    pub correlation_id: String,
+    pub token_id: String,
     pub app_id: i64,
     pub user_id: i64,
 }
@@ -273,25 +274,60 @@ impl OAuthCode {
         let json = serde_json::to_string(value).expect("can not serialize JSON for Redis");
         redis::cmd("SET").arg(key).arg(json).arg("NX").arg("EX").arg(expire)
             .query_async::<_, ()>(&mut **conn).await
+            .map_err(|e| {
+                warn!("{}", e);
+                e
+            })
     }
-    pub async fn get(key: &str, conn: &mut Connection<OAuthCodeDB>) -> RedisResult<OAuthCode> {
+    pub async fn get(key: &str, conn: &mut Connection<OAuthCodeDB>) -> RedisResult<Option<OAuthCode>> {
         redis::cmd("GET").arg(key)
-            .query_async::<_, String>(&mut **conn).await
-            .map(|json| serde_json::from_str(&json).expect("can not deserialize JSON from Redis"))
+            .query_async::<_, Option<String>>(&mut **conn).await
+            .map(|opt|
+                opt.map(|json| serde_json::from_str(&json).expect("can not deserialize JSON from Redis")))
+    }
+    pub async fn delete(key: &str, conn: &mut Connection<OAuthCodeDB>) -> RedisResult<()> {
+        redis::cmd("DEL").arg(key)
+            .query_async::<_, ()>(&mut **conn).await
+            .map_err(|e| {
+                warn!("{}", e);
+                e
+            })
     }
 }
 
 impl OAuthRefresh {
     pub async fn insert(key: &String, value: &OAuthRefresh, expire: u64, conn: &mut Connection<OAuthRefreshDB>) -> RedisResult<()> {
         redis::pipe()
+            .atomic()
             .cmd("HSET").arg(key).arg(&[
                 ("client_id", value.client_id.to_string()),
-                ("correlation_id", value.correlation_id.to_string()),
+                ("token_id", value.token_id.to_string()),
                 ("user_id", value.user_id.to_string()),
                 ("app_id", value.app_id.to_string()),
             ])
             .cmd("EXPIRE").arg(key).arg(expire)
             .query_async::<_, ()>(&mut **conn).await
+            .map_err(|e| {
+                warn!("{}", e);
+                e
+            })
+    }
+    pub async fn get(key: &str, conn: &mut Connection<OAuthRefreshDB>) -> RedisResult<Option<OAuthRefresh>> {
+        redis::cmd("HGETALL").arg(key)
+            .query_async::<_, Option<HashMap<String, String>>>(&mut **conn).await
+            .map(|opt| opt.map(|map| map.into()))
+            .map_err(|e| {
+                warn!("{}", e);
+                e
+            })
+    }
+    pub async fn delete(key: &str, conn: &mut Connection<OAuthRefreshDB>) -> RedisResult<()> {
+        redis::cmd("DEL").arg(key)
+            .query_async::<_, ()>(&mut **conn).await
+            .map_err(|e| {
+                warn!("{}", e);
+                e
+            })
     }
 }
 
@@ -322,6 +358,17 @@ impl From<Row> for OAuthApp {
             updated_at: row.get("updated_at"),
             created_at: row.get("created_at"),
             created_by: row.get("created_by"),
+        }
+    }
+}
+
+impl From<HashMap<String, String>> for OAuthRefresh {
+    fn from(map: HashMap<String, String>) -> Self {
+        Self {
+            client_id: map.get("client_id").unwrap().clone(),
+            token_id: map.get("token_id").unwrap().clone(),
+            app_id: map.get("app_id").map(|s| s.parse::<i64>().unwrap()).unwrap(),
+            user_id: map.get("user_id").map(|s| s.parse::<i64>().unwrap()).unwrap(),
         }
     }
 }

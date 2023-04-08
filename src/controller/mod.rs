@@ -1,4 +1,3 @@
-use jsonwebtoken::{Algorithm, decode, DecodingKey, Validation};
 use rocket::fairing::AdHoc;
 use rocket::serde::{Deserialize, Serialize};
 use rocket_db_pools::Database;
@@ -52,22 +51,4 @@ pub async fn start_rocket() -> Result<(), rocket::Error> {
         .launch()
         .await?;
     Ok(())
-}
-
-fn read_token(header: &str, secret: &String) -> Result<AuthToken, String> {
-    let keys = header.split("Bearer ").collect::<Vec<&str>>();
-    if keys.len() != 2 || keys[1].len() == 0 {
-        error!("token invalid {:?}", header);
-        return Err("Token not valid!".to_string());
-    }
-    let decode_key = DecodingKey::from_secret(secret.as_ref());
-    let validation = Validation::new(Algorithm::HS512);
-    let token = decode::<AuthToken>(keys[1], &decode_key, &validation);
-    match token {
-        Ok(t) => Ok(t.claims),
-        Err(e) => {
-            error!("token invalid {}", e);
-            Err("Token not valid!".to_string())
-        }
-    }
 }

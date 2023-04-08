@@ -3,14 +3,15 @@ use rocket::http::Status;
 use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::FromRequest;
 use rocket_db_pools::Connection;
+use crate::auth::token_utils::read_jwt;
 use crate::config::Config;
-use crate::controller::{AuthToken, AuthTokenError, Prefix, read_token};
+use crate::controller::{AuthToken, AuthTokenError, Prefix};
 use crate::database::AuthDB;
 use crate::users::model::User;
 
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for AuthToken { // TODO &'r AuthToken
-type Error = AuthTokenError;
+    type Error = AuthTokenError;
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
         let keys: Vec<_> = request.headers().get("Authorization").collect();
@@ -20,7 +21,7 @@ type Error = AuthTokenError;
                 warn!("Access denied! Missing token.");
                 Failure((Status::Unauthorized, Self::Error::Missing))
             }
-            1 => match read_token(keys[0], &config.jwt_key) {
+            1 => match read_jwt_from_header(keys[0], &config.jwt_key) {
                 Ok(token) => {
                     debug!("token is valid");
                     Success(token)
@@ -97,4 +98,13 @@ impl<'r> FromRequest<'r> for Prefix {
             }
         }
     }
+}
+
+fn read_jwt_from_header(header: &str, secret: &String) -> Result<AuthToken, String> {
+    let headers = header.split("Bearer ").collect::<Vec<&str>>();
+    if headers.len() != 2 || headers[1].len() == 0 {
+        warn!("Invalid JWT token: {}", header);
+        return Err(String::from("Token not valid!"));
+    }
+    read_jwt(headers[1], secret)
 }

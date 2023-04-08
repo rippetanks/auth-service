@@ -11,20 +11,24 @@ use rocket_db_pools::Connection;
 use url::Url;
 use uuid::Uuid;
 use crate::auth::crypto::generate_secure_code;
+use crate::auth::db_utils::{get_app_by_client_id, get_by_client_id, get_user_by_email, get_user_by_id};
 use crate::auth::http_basic_auth::HttpBasicAuth;
-use crate::auth::utils::{create_auth2_ac_refresh, create_oauth2_ac_token, create_oauth2_cc_token,
-                         get_app_by_client_id, get_by_client_id, get_code_from_redis, get_user_by_email,
-                         put_code_to_redis, put_refresh_to_redis, parse_uri};
+use crate::auth::redis_utils::{get_auth_code_from_redis, get_refresh_token_from_redis, put_auth_code_to_redis, put_refresh_token_to_redis, remove_auth_code_from_redis, remove_refresh_token_from_redis};
+use crate::auth::token_utils::{create_oauth2_access_token, create_oauth2_refresh_token, read_oauth2_refresh_token};
+use crate::auth::utils::parse_uri;
 use crate::config::Config;
 use crate::controller::AuthToken;
 use crate::database::{AuthDB, OAuthCodeDB, OAuthRefreshDB};
-use crate::oauth::model::{OAuthCode, OAuthCredential, OAuthRefresh};
+use crate::oauth::model::{OAuthCode, OAuthCredential};
 use crate::users::model::User;
 
 pub mod crypto;
+pub mod token_utils;
 
 mod http_basic_auth;
 mod utils;
+mod db_utils;
+mod redis_utils;
 
 #[derive(Debug, Deserialize)]
 #[serde(crate = "rocket::serde")]
@@ -38,6 +42,8 @@ struct OAuth2TokenRequest<'r> {
     grant_type: &'r str,
     code: Option<&'r str>,
     redirect_uri: Option<&'r str>,
+    refresh_token: Option<&'r str>,
+    scope: Option<&'r str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +60,17 @@ struct OAuth2TokenResponse {
 #[serde(crate = "rocket::serde")]
 struct OAuth2LoginResponse {
     code: String,
+}
+
+#[derive(Debug)]
+struct OAuth2AuthFlowBody<'r> {
+    code: &'r str,
+    redirect_uri: &'r str,
+}
+
+#[derive(Debug)]
+struct OAuth2RefreshFlowBody<'r> {
+    refresh_token: &'r str,
 }
 
 pub fn mount(rocket: rocket::Rocket<Build>) -> rocket::Rocket<Build> {
@@ -112,7 +129,7 @@ async fn oauth2_login(mut conn_auth: Connection<AuthDB>, mut conn_token: Connect
         app_id: app.id,
         user_id: user.id,
     };
-    put_code_to_redis(&mut conn_token, &code, &oauth_code, config).await?;
+    put_auth_code_to_redis(&mut conn_token, &code, &oauth_code, config).await?;
     if User::update_last_login(user.id, &mut conn_auth).await.is_err() {
         error!("can not update last login of user {}", user.id);
     }
@@ -133,7 +150,7 @@ async fn oauth2_token(mut conn_auth: Connection<AuthDB>,
             let auth = auth_header.unwrap();
             let credential = get_by_client_id(&mut conn_auth, &auth.client_id).await?;
             if crypto::hash_secret_check(&auth.client_secret, &credential.client_secret) {
-                let token = create_oauth2_cc_token(&credential, &config)?;
+                let (token, _) = create_oauth2_access_token(&(&credential).into(), &config)?;
                 if OAuthCredential::update_last_used(credential.id, &mut conn_auth).await.is_err() {
                     error!("can not update last used of oauth credential {}", credential.id);
                 }
@@ -149,30 +166,56 @@ async fn oauth2_token(mut conn_auth: Connection<AuthDB>,
             }
         },
         "client_credentials" => {
-            warn!("");
+            warn!("Access denied! Missing authentication header");
             Err(Status::Unauthorized)
         }
         "authorization_code" => {
-            let (body_code, body_redirect) = ensure_required(&body)?;
-            let redis_code = get_code_from_redis(&mut conn_code, &body_code).await?;
-            if body_redirect != redis_code.redirect_uri {
+            let ac_body = body_for_auth_flow(&body)?;
+            debug!("body: {:?}", ac_body);
+            let redis_code = get_auth_code_from_redis(&mut conn_code, ac_body.code).await?;
+            remove_auth_code_from_redis(&mut conn_code, ac_body.code).await?;
+            if ac_body.redirect_uri != redis_code.redirect_uri {
                 warn!("Access denied! Redirect URI is not the same.");
                 return Err(Status::Unauthorized);
             }
-            let access_token = create_oauth2_ac_token(&redis_code, config)?;
-            let refresh_token = create_auth2_ac_refresh(&redis_code, config)?;
-            let redis_refresh = OAuthRefresh {
-                client_id: redis_code.client_id,
-                correlation_id: refresh_token.correlation_id.clone(),
-                user_id: redis_code.user_id,
-                app_id: redis_code.app_id,
-            };
-            put_refresh_to_redis(&mut conn_refresh, &config, &refresh_token, &redis_refresh).await?;
+            let (a_token, _) = create_oauth2_access_token(&(&redis_code).into(), config)?;
+            let (r_token, r_info) = create_oauth2_refresh_token(Some(&redis_code), None, config)?;
+            put_refresh_token_to_redis(&mut conn_refresh, &r_info, &config).await?;
             Ok(Json(OAuth2TokenResponse {
-                access_token,
+                access_token: a_token,
                 token_type: "bearer".to_string(),
                 expires_in: config.oauth_access_token_exp,
-                refresh_token: Some(refresh_token.token),
+                refresh_token: Some(r_token),
+            }))
+        },
+        "refresh_token" => {
+            let rt_body = body_for_refresh_flow(&body)?;
+            debug!("body: {:?}", rt_body);
+            let parsed_token = read_oauth2_refresh_token(rt_body.refresh_token, &config.oauth_jwt_encrypt_key)?;
+            debug!("parsed token: {:?}", parsed_token);
+            let redis_token = match get_refresh_token_from_redis(&mut conn_refresh, &parsed_token).await? {
+                Some(t) if t.token_id == parsed_token.jti => Ok(t),
+                Some(_) => {
+                    warn!("detected reuse of refresh token {}", parsed_token.correlation_id);
+                    remove_refresh_token_from_redis(&mut conn_refresh, &parsed_token.correlation_id).await?;
+                    Err(Status::Unauthorized)
+                },
+                None => {
+                    warn!("refresh token {} not found on Redis", parsed_token.correlation_id);
+                    Err(Status::Unauthorized)
+                }
+            }?;
+            debug!("redis token: {:?}", redis_token);
+            get_app_by_client_id(&mut conn_auth, &parsed_token.client_id).await?;
+            get_user_by_id(&mut conn_auth, parsed_token.user_id).await?;
+            let (a_token, _) = create_oauth2_access_token(&(&parsed_token).into(), config)?;
+            let (r_token, r_info) = create_oauth2_refresh_token(None, Some(&parsed_token), config)?;
+            put_refresh_token_to_redis(&mut conn_refresh, &r_info, &config).await?;
+            Ok(Json(OAuth2TokenResponse {
+                access_token: a_token,
+                token_type: "bearer".to_string(),
+                expires_in: config.oauth_access_token_exp,
+                refresh_token: Some(r_token),
             }))
         },
         _ => {
@@ -219,12 +262,25 @@ fn validate_redirect_uri(redirect_uri: &Url, registered_uri: &Url) -> bool {
         && redirect_uri.path() == registered_uri.path()
 }
 
-fn ensure_required<'r>(form: &OAuth2TokenRequest) -> Result<(String, String), Status> {
+fn body_for_auth_flow<'r>(form: &OAuth2TokenRequest<'r>) -> Result<OAuth2AuthFlowBody<'r>, Status> {
     if form.code.is_none() || form.redirect_uri.is_none() {
         warn!("missing required field in form");
         return Err(Status::BadRequest);
     }
-    Ok((form.code.unwrap().to_string(), form.redirect_uri.unwrap().to_string()))
+    Ok(OAuth2AuthFlowBody {
+        code: form.code.unwrap(),
+        redirect_uri: form.redirect_uri.unwrap(),
+    })
+}
+
+fn body_for_refresh_flow<'r>(form: &OAuth2TokenRequest<'r>) -> Result<OAuth2RefreshFlowBody<'r>, Status> {
+    if form.refresh_token.is_none() {
+        warn!("missing required field in form");
+        return Err(Status::BadRequest);
+    }
+    Ok(OAuth2RefreshFlowBody {
+        refresh_token: form.refresh_token.unwrap(),
+    })
 }
 
 fn to_query_params(client_id: &str, redirect_to: &Url, scope: Option<&str>, state: Option<&str>) -> String {
@@ -232,7 +288,6 @@ fn to_query_params(client_id: &str, redirect_to: &Url, scope: Option<&str>, stat
     params.push(("response_type", "code"));
     params.push(("client_id", client_id));
     params.push(("redirect_uri", redirect_to.as_str()));
-    //params.push(scope.map(|s| ("scope", s)).unwrap_or(("", "")));
     scope.map(|s| params.push(("scope", s)));
     state.map(|s| params.push(("state", s)));
     querystring::stringify(params)
