@@ -80,6 +80,7 @@ pub struct OAuthCode {
     pub redirect_uri: String,
     pub app_id: i64,
     pub user_id: i64,
+    pub code_challenge: Option<String>,
 }
 
 #[derive(Debug)]

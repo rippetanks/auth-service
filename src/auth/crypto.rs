@@ -3,6 +3,7 @@ use base64::Engine;
 use rand_core::{OsRng, RngCore};
 use scrypt::{Params, Scrypt};
 use scrypt::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use sha2::{Sha256, Digest};
 
 pub fn hash_pwd(pwd: &str) -> Option<String> {
     let params = Params::recommended();
@@ -61,4 +62,12 @@ pub fn generate_secure_code() -> String {
     OsRng.fill_bytes(&mut code);
     let engine = base64::engine::general_purpose::STANDARD;
     engine.encode(code)
+}
+
+pub fn hash_code_verifier(to_hash: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(to_hash.as_bytes());
+    let result = hasher.finalize();
+    let engine = base64::engine::general_purpose::URL_SAFE;
+    engine.encode(result)
 }

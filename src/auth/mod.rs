@@ -10,7 +10,7 @@ use rocket::serde::json::serde_json::json;
 use rocket_db_pools::Connection;
 use url::Url;
 use uuid::Uuid;
-use crate::auth::crypto::generate_secure_code;
+use crate::auth::crypto::{generate_secure_code, hash_code_verifier};
 use crate::auth::db_utils::{get_app_by_client_id, get_by_client_id, get_user_by_email, get_user_by_id};
 use crate::auth::http_basic_auth::HttpBasicAuth;
 use crate::auth::redis_utils::{get_auth_code_from_redis, get_refresh_token_from_redis, put_auth_code_to_redis, put_refresh_token_to_redis, remove_auth_code_from_redis, remove_refresh_token_from_redis};
@@ -44,6 +44,7 @@ struct OAuth2TokenRequest<'r> {
     redirect_uri: Option<&'r str>,
     refresh_token: Option<&'r str>,
     scope: Option<&'r str>,
+    code_verifier: Option<&'r str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -87,12 +88,13 @@ async fn login(mut conn: Connection<AuthDB>, config: &State<Config>, json: Json<
     Ok(json!({"token": token}).to_string())
 }
 
-#[get("/oauth2/authorize?<response_type>&<client_id>&<redirect_uri>&<scope>&<state>")]
-async fn oauth2_authorize(mut conn: Connection<AuthDB>,
-                          response_type: &str, client_id: &str, redirect_uri: Option<&str>,
-                          scope: Option<&str>, state: Option<&str>) -> Result<Redirect, Status> {
-    info!("oauth2 authorize params - response_type: {}, client_id: {}, redirect_uri: {:?}, scope: {:?}",
-        response_type, client_id, redirect_uri, scope);
+#[get("/oauth2/authorize?<response_type>&<client_id>&<redirect_uri>&<scope>&<state>&<code_challenge>")]
+async fn oauth2_authorize(mut conn: Connection<AuthDB>, response_type: &str, client_id: &str,
+                          redirect_uri: Option<&str>, scope: Option<&str>, state: Option<&str>,
+                          code_challenge: Option<&str>) -> Result<Redirect, Status> {
+    info!("oauth2 authorize params - \
+        response_type: {}, client_id: {}, redirect_uri: {:?}, scope: {:?}, (has)state: {}, code_challenge: {:?}",
+        response_type, client_id, redirect_uri, scope, state.is_some(), code_challenge);
     if response_type != "code" {
         warn!("response_type {} is invalid", response_type);
         return Err(Status::BadRequest);
@@ -106,15 +108,15 @@ async fn oauth2_authorize(mut conn: Connection<AuthDB>,
         warn!("redirect_uri {} is invalid", redirect_to);
         return Err(Status::BadRequest);
     }
-    let params = to_query_params(client_id, &redirect_to, scope, state);
+    let params = to_query_params(client_id, &redirect_to, scope, state, code_challenge);
     let uri = format!("{}?{}", "/web/oauth2/login", params);
     info!("redirecting to {}", uri);
     Ok(Redirect::found(uri))
 }
 
-#[post("/oauth2/login?<client_id>&<redirect_uri>", data = "<json>", format = "application/json")]
-async fn oauth2_login(mut conn_auth: Connection<AuthDB>, mut conn_token: Connection<OAuthCodeDB>,
-                      config: &State<Config>, client_id: &str, redirect_uri: &str,
+#[post("/oauth2/login?<client_id>&<redirect_uri>&<code_challenge>", data = "<json>", format = "application/json")]
+async fn oauth2_login(mut conn_auth: Connection<AuthDB>, mut conn_code: Connection<OAuthCodeDB>,
+                      config: &State<Config>, client_id: &str, redirect_uri: &str, code_challenge: Option<&str>,
                       json: Json<AuthJSON<'_>>) -> Result<Json<OAuth2LoginResponse>, Status> {
     let app = get_app_by_client_id(&mut conn_auth, &client_id.to_string()).await?;
     let user = handle_login(json.email, json.password, &mut conn_auth).await?;
@@ -128,8 +130,9 @@ async fn oauth2_login(mut conn_auth: Connection<AuthDB>, mut conn_token: Connect
         client_id: client_id.to_string(),
         app_id: app.id,
         user_id: user.id,
+        code_challenge: code_challenge.map(|c| c.to_string())
     };
-    put_auth_code_to_redis(&mut conn_token, &code, &oauth_code, config).await?;
+    put_auth_code_to_redis(&mut conn_code, &code, &oauth_code, config).await?;
     if User::update_last_login(user.id, &mut conn_auth).await.is_err() {
         error!("can not update last login of user {}", user.id);
     }
@@ -177,6 +180,16 @@ async fn oauth2_token(mut conn_auth: Connection<AuthDB>,
             if ac_body.redirect_uri != redis_code.redirect_uri {
                 warn!("Access denied! Redirect URI is not the same.");
                 return Err(Status::Unauthorized);
+            }
+            if redis_code.code_challenge.is_some() && body.code_verifier.is_none() {
+                warn!("Access denied! Missing code verifier.");
+                return Err(Status::Unauthorized);
+            } else if let Some(code_challenge) = &redis_code.code_challenge {
+                let hashed_verifier = hash_code_verifier(body.code_verifier.unwrap());
+                if &hashed_verifier != code_challenge {
+                    warn!("Access denied! Invalid code verifier {} - challenge is: {}", hashed_verifier, code_challenge);
+                    return Err(Status::Unauthorized);
+                }
             }
             let (a_token, _) = create_oauth2_access_token(&(&redis_code).into(), config)?;
             let (r_token, r_info) = create_oauth2_refresh_token(Some(&redis_code), None, config)?;
@@ -283,12 +296,14 @@ fn body_for_refresh_flow<'r>(form: &OAuth2TokenRequest<'r>) -> Result<OAuth2Refr
     })
 }
 
-fn to_query_params(client_id: &str, redirect_to: &Url, scope: Option<&str>, state: Option<&str>) -> String {
+fn to_query_params(client_id: &str, redirect_to: &Url, scope: Option<&str>, state: Option<&str>,
+                   code_challenge: Option<&str>) -> String {
     let mut params = Vec::new();
     params.push(("response_type", "code"));
     params.push(("client_id", client_id));
     params.push(("redirect_uri", redirect_to.as_str()));
     scope.map(|s| params.push(("scope", s)));
     state.map(|s| params.push(("state", s)));
+    code_challenge.map(|s| params.push(("code_challenge", s)));
     querystring::stringify(params)
 }
