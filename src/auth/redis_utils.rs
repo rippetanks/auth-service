@@ -1,14 +1,14 @@
 use rocket::http::Status;
 use rocket::State;
 use rocket_db_pools::Connection;
-use crate::auth::token_utils::RefreshToken;
+use crate::auth::token::OAuthRefreshToken;
 use crate::config::Config;
 use crate::database::{OAuthCodeDB, OAuthRefreshDB};
-use crate::oauth::model::{OAuthCode, OAuthRefresh};
+use crate::oauth::model::{OAuthCode, OAuthCodeCreateForm, OAuthRefresh};
 
 pub async fn put_auth_code_to_redis(conn: &mut Connection<OAuthCodeDB>,
                                     code: &String,
-                                    payload: &OAuthCode,
+                                    payload: &OAuthCodeCreateForm<'_>,
                                     config: &State<Config>) -> Result<(), Status> {
     match OAuthCode::insert(code, payload, config.oauth_auth_code_exp, conn).await {
         Ok(_) => Ok(()),
@@ -44,7 +44,7 @@ pub async fn remove_auth_code_from_redis(conn: &mut Connection<OAuthCodeDB>, cod
 }
 
 pub async fn put_refresh_token_to_redis(conn: &mut Connection<OAuthRefreshDB>,
-                                        token: &RefreshToken,
+                                        token: &OAuthRefreshToken,
                                         config: &State<Config>,) -> Result<(), Status> {
     let payload = OAuthRefresh {
         client_id: token.client_id.clone(),
@@ -62,7 +62,7 @@ pub async fn put_refresh_token_to_redis(conn: &mut Connection<OAuthRefreshDB>,
 }
 
 pub async fn get_refresh_token_from_redis(conn: &mut Connection<OAuthRefreshDB>,
-                                          token: &RefreshToken) -> Result<Option<OAuthRefresh>, Status> {
+                                          token: &OAuthRefreshToken) -> Result<Option<OAuthRefresh>, Status> {
     match OAuthRefresh::get(&token.correlation_id, conn).await {
         Ok(opt) => Ok(opt),
         Err(e) => {

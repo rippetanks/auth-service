@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-use jsonwebtoken::{Algorithm, encode, EncodingKey, Header};
 use rocket::{Build, State};
 use rocket::form::Form;
 use rocket::http::Status;
@@ -9,21 +7,20 @@ use rocket::serde::json::Json;
 use rocket::serde::json::serde_json::json;
 use rocket_db_pools::Connection;
 use url::Url;
-use uuid::Uuid;
 use crate::auth::crypto::{generate_secure_code, hash_code_verifier};
 use crate::auth::db_utils::{get_app_by_client_id, get_by_client_id, get_user_by_email, get_user_by_id};
 use crate::auth::http_basic_auth::HttpBasicAuth;
 use crate::auth::redis_utils::{get_auth_code_from_redis, get_refresh_token_from_redis, put_auth_code_to_redis, put_refresh_token_to_redis, remove_auth_code_from_redis, remove_refresh_token_from_redis};
-use crate::auth::token_utils::{create_oauth2_access_token, create_oauth2_refresh_token, read_oauth2_refresh_token};
+use crate::auth::token::generate_jwt_token;
+use crate::auth::token::utils::{create_oauth2_access_token, create_oauth2_refresh_token, read_oauth2_refresh_token};
 use crate::auth::utils::parse_uri;
 use crate::config::Config;
-use crate::controller::AuthToken;
 use crate::database::{AuthDB, OAuthCodeDB, OAuthRefreshDB};
-use crate::oauth::model::{OAuthCode, OAuthCredential};
+use crate::oauth::model::{OAuthCodeCreateForm, OAuthCredential};
 use crate::users::model::User;
 
 pub mod crypto;
-pub mod token_utils;
+pub mod token;
 
 mod http_basic_auth;
 mod utils;
@@ -53,9 +50,11 @@ struct OAuth2TokenResponse {
     access_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     refresh_token: Option<String>,
-    token_type: String,
+    token_type: &'static str,
     expires_in: u64,
 }
+
+const BEARER_TOKEN_TYPE: &str = "bearer";
 
 #[derive(Debug, Serialize)]
 #[serde(crate = "rocket::serde")]
@@ -79,7 +78,10 @@ pub fn mount(rocket: rocket::Rocket<Build>) -> rocket::Rocket<Build> {
 }
 
 #[post("/login", data = "<json>", format = "application/json")]
-async fn login(mut conn: Connection<AuthDB>, config: &State<Config>, json: Json<AuthJSON<'_>>) -> Result<String, Status> {
+async fn login(mut conn: Connection<AuthDB>,
+               config: &State<Config>,
+               json: Json<AuthJSON<'_>>) -> Result<String, Status> {
+    trace!("login {:?}", json);
     let user = handle_login(json.email, json.password, &mut conn).await?;
     let token = generate_jwt_token(&user, &config)?;
     if User::update_last_login(user.id, &mut conn).await.is_err() {
@@ -89,8 +91,12 @@ async fn login(mut conn: Connection<AuthDB>, config: &State<Config>, json: Json<
 }
 
 #[get("/oauth2/authorize?<response_type>&<client_id>&<redirect_uri>&<scope>&<state>&<code_challenge>")]
-async fn oauth2_authorize(mut conn: Connection<AuthDB>, response_type: &str, client_id: &str,
-                          redirect_uri: Option<&str>, scope: Option<&str>, state: Option<&str>,
+async fn oauth2_authorize(mut conn: Connection<AuthDB>,
+                          response_type: &str,
+                          client_id: &str,
+                          redirect_uri: Option<&str>,
+                          scope: Option<&str>,
+                          state: Option<&str>,
                           code_challenge: Option<&str>) -> Result<Redirect, Status> {
     info!("oauth2 authorize params - \
         response_type: {}, client_id: {}, redirect_uri: {:?}, scope: {:?}, (has)state: {}, code_challenge: {:?}",
@@ -99,7 +105,7 @@ async fn oauth2_authorize(mut conn: Connection<AuthDB>, response_type: &str, cli
         warn!("response_type {} is invalid", response_type);
         return Err(Status::BadRequest);
     }
-    let app = get_app_by_client_id(&mut conn, &client_id.to_string()).await?;
+    let app = get_app_by_client_id(&mut conn, client_id).await?;
     let app_redirect_uri = parse_uri(&app.redirect_uri)?;
     let redirect_to = redirect_uri
         .map(|u| parse_uri(u))
@@ -110,27 +116,31 @@ async fn oauth2_authorize(mut conn: Connection<AuthDB>, response_type: &str, cli
     }
     let params = to_query_params(client_id, &redirect_to, scope, state, code_challenge);
     let uri = format!("{}?{}", "/web/oauth2/login", params);
-    info!("redirecting to {}", uri);
+    debug!("redirecting to: {}", uri);
     Ok(Redirect::found(uri))
 }
 
 #[post("/oauth2/login?<client_id>&<redirect_uri>&<code_challenge>", data = "<json>", format = "application/json")]
-async fn oauth2_login(mut conn_auth: Connection<AuthDB>, mut conn_code: Connection<OAuthCodeDB>,
-                      config: &State<Config>, client_id: &str, redirect_uri: &str, code_challenge: Option<&str>,
+async fn oauth2_login(mut conn_auth: Connection<AuthDB>,
+                      mut conn_code: Connection<OAuthCodeDB>,
+                      config: &State<Config>,
+                      client_id: &str,
+                      redirect_uri: &str,
+                      code_challenge: Option<&str>,
                       json: Json<AuthJSON<'_>>) -> Result<Json<OAuth2LoginResponse>, Status> {
-    let app = get_app_by_client_id(&mut conn_auth, &client_id.to_string()).await?;
+    let app = get_app_by_client_id(&mut conn_auth, client_id).await?;
     let user = handle_login(json.email, json.password, &mut conn_auth).await?;
     if app.created_by != user.id {
         warn!("user {} tried to use app with client_id {} of user {}", user.id, client_id, app.created_by);
         return Err(Status::Forbidden);
     }
     let code = generate_secure_code();
-    let oauth_code = OAuthCode {
-        redirect_uri: redirect_uri.to_string(),
-        client_id: client_id.to_string(),
+    let oauth_code = OAuthCodeCreateForm {
+        redirect_uri,
+        client_id,
         app_id: app.id,
         user_id: user.id,
-        code_challenge: code_challenge.map(|c| c.to_string())
+        code_challenge,
     };
     put_auth_code_to_redis(&mut conn_code, &code, &oauth_code, config).await?;
     if User::update_last_login(user.id, &mut conn_auth).await.is_err() {
@@ -145,34 +155,34 @@ async fn oauth2_login(mut conn_auth: Connection<AuthDB>, mut conn_code: Connecti
 async fn oauth2_token(mut conn_auth: Connection<AuthDB>,
                       mut conn_code: Connection<OAuthCodeDB>,
                       mut conn_refresh: Connection<OAuthRefreshDB>,
-                      config: &State<Config>, body: Form<OAuth2TokenRequest<'_>>,
+                      config: &State<Config>,
+                      body: Form<OAuth2TokenRequest<'_>>,
                       auth_header: Option<HttpBasicAuth>) -> Result<Json<OAuth2TokenResponse>, Status> {
-    info!("{:?} {:?}", body, auth_header);
-    match body.grant_type {
-        "client_credentials" if auth_header.is_some() => {
-            let auth = auth_header.unwrap();
-            let credential = get_by_client_id(&mut conn_auth, &auth.client_id).await?;
-            if crypto::hash_secret_check(&auth.client_secret, &credential.client_secret) {
+    trace!("oauth token {:?} {:?}", body, auth_header);
+    match (body.grant_type, auth_header) {
+        ("client_credentials", Some(ah)) => {
+            let credential = get_by_client_id(&mut conn_auth, &ah.client_id).await?;
+            if crypto::hash_secret_check(&ah.client_secret, &credential.client_secret) {
                 let (token, _) = create_oauth2_access_token(&(&credential).into(), &config)?;
                 if OAuthCredential::update_last_used(credential.id, &mut conn_auth).await.is_err() {
                     error!("can not update last used of oauth credential {}", credential.id);
                 }
                 Ok(Json(OAuth2TokenResponse {
                     access_token: token,
-                    token_type: "bearer".to_string(),
+                    token_type: BEARER_TOKEN_TYPE,
                     expires_in: config.oauth_access_token_exp,
                     refresh_token: None,
                 }))
             } else {
-                warn!("Access denied! Wrong oauth credential for client_id {}", auth.client_id);
+                warn!("Access denied! Wrong oauth credential for client_id {}", ah.client_id);
                 Err(Status::Unauthorized)
             }
         },
-        "client_credentials" => {
+        ("client_credentials", None) => {
             warn!("Access denied! Missing authentication header");
             Err(Status::Unauthorized)
         }
-        "authorization_code" => {
+        ("authorization_code", _) => {
             let ac_body = body_for_auth_flow(&body)?;
             debug!("body: {:?}", ac_body);
             let redis_code = get_auth_code_from_redis(&mut conn_code, ac_body.code).await?;
@@ -196,12 +206,12 @@ async fn oauth2_token(mut conn_auth: Connection<AuthDB>,
             put_refresh_token_to_redis(&mut conn_refresh, &r_info, &config).await?;
             Ok(Json(OAuth2TokenResponse {
                 access_token: a_token,
-                token_type: "bearer".to_string(),
+                token_type: BEARER_TOKEN_TYPE,
                 expires_in: config.oauth_access_token_exp,
                 refresh_token: Some(r_token),
             }))
         },
-        "refresh_token" => {
+        ("refresh_token", _) => {
             let rt_body = body_for_refresh_flow(&body)?;
             debug!("body: {:?}", rt_body);
             let parsed_token = read_oauth2_refresh_token(rt_body.refresh_token, &config.oauth_jwt_encrypt_key)?;
@@ -226,7 +236,7 @@ async fn oauth2_token(mut conn_auth: Connection<AuthDB>,
             put_refresh_token_to_redis(&mut conn_refresh, &r_info, &config).await?;
             Ok(Json(OAuth2TokenResponse {
                 access_token: a_token,
-                token_type: "bearer".to_string(),
+                token_type: BEARER_TOKEN_TYPE,
                 expires_in: config.oauth_access_token_exp,
                 refresh_token: Some(r_token),
             }))
@@ -245,26 +255,6 @@ async fn handle_login(email: &str, password: &str, conn: &mut Connection<AuthDB>
     } else {
         warn!("Access denied! Wrong password for user {}", email);
         Err(Status::Unauthorized)
-    }
-}
-
-fn generate_jwt_token(user: &User, config: &State<Config>) -> Result<String, Status> {
-    let header = Header::new(Algorithm::HS512);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let claims = AuthToken {
-        sub: user.id,
-        exp: (now + config.jwt_exp) as usize,
-        iat: now as usize,
-        iss: "".to_string(),
-        jti: Uuid::new_v4().to_string(),
-    };
-    let encoding_key = EncodingKey::from_secret(config.jwt_key.as_ref());
-    match encode(&header, &claims, &encoding_key) {
-        Ok(token) => Ok(token),
-        Err(e) => {
-            error!("can not encode JWT token - cause {}", e);
-            Err(Status::InternalServerError)
-        }
     }
 }
 

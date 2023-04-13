@@ -1,5 +1,4 @@
 use rocket::fairing::AdHoc;
-use rocket::serde::{Deserialize, Serialize};
 use rocket_db_pools::Database;
 use rocket_dyn_templates::Template;
 use crate::{auth, oauth, users, web};
@@ -11,24 +10,6 @@ mod outcome;
 #[derive(Debug)]
 pub struct Prefix {
     pub prefix: String
-}
-
-#[derive(Debug)]
-pub enum AuthTokenError {
-    BadCount,
-    Missing,
-    Invalid,
-    Broken
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(crate = "rocket::serde")]
-pub struct AuthToken {
-    pub sub: i64,
-    pub exp: usize,
-    pub iat: usize,
-    pub iss: String,
-    pub jti: String,
 }
 
 pub async fn start_rocket() -> Result<(), rocket::Error> {

@@ -3,9 +3,10 @@ use rocket::http::Status;
 use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::FromRequest;
 use rocket_db_pools::Connection;
-use crate::auth::token_utils::read_jwt;
+use crate::auth::token;
+use crate::auth::token::{AuthToken, AuthTokenError};
 use crate::config::Config;
-use crate::controller::{AuthToken, AuthTokenError, Prefix};
+use crate::controller::Prefix;
 use crate::database::AuthDB;
 use crate::users::model::User;
 
@@ -100,11 +101,13 @@ impl<'r> FromRequest<'r> for Prefix {
     }
 }
 
-fn read_jwt_from_header(header: &str, secret: &String) -> Result<AuthToken, String> {
+const AUTH_HEADER_NOT_VALID: &str = "Invalid authorization header!";
+
+fn read_jwt_from_header(header: &str, secret: &String) -> Result<AuthToken, &'static str> {
     let headers = header.split("Bearer ").collect::<Vec<&str>>();
     if headers.len() != 2 || headers[1].len() == 0 {
-        warn!("Invalid JWT token: {}", header);
-        return Err(String::from("Token not valid!"));
+        warn!("Invalid authorization header: {}", header);
+        return Err(AUTH_HEADER_NOT_VALID);
     }
-    read_jwt(headers[1], secret)
+    token::read_jwt(headers[1], secret)
 }

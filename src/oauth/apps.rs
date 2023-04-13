@@ -13,11 +13,13 @@ pub fn get_routes() -> Vec<Route> {
 }
 
 #[post("/", data = "<dto>", format = "application/json")]
-async fn create(mut conn: Connection<AuthDB>, user: User, dto: Json<OAuthAppCreateRequestDTO>) -> Result<Json<OAuthAppCreateResponseDTO>, Status> {
+async fn create(mut conn: Connection<AuthDB>, user: User,
+                dto: Json<OAuthAppCreateRequestDTO<'_>>) -> Result<Json<OAuthAppCreateResponseDTO>, Status> {
     debug!("creating oauth app {:?} for user {}", dto, user.id);
+    let client_id = Uuid::new_v4().to_string();
     let form = OAuthAppCreateForm {
-        client_id: Uuid::new_v4().to_string(),
-        redirect_uri: dto.redirect_uri.to_string(),
+        client_id: &client_id,
+        redirect_uri: dto.redirect_uri,
         created_by: user.id,
     };
     match OAuthApp::insert(&form, &mut conn).await {
@@ -26,7 +28,7 @@ async fn create(mut conn: Connection<AuthDB>, user: User, dto: Json<OAuthAppCrea
             Ok(Json(app.into()))
         },
         Err(e) => {
-            error!("can not create oauth app - cause {}", e);
+            error!("can not create oauth app - cause: {}", e);
             Err(Status::InternalServerError)
         }
     }
@@ -34,7 +36,7 @@ async fn create(mut conn: Connection<AuthDB>, user: User, dto: Json<OAuthAppCrea
 
 #[get("/<id>")]
 async fn get_by_id(mut conn: Connection<AuthDB>, id: i64, user: User) -> Result<Json<OAuthAppDTO>, Status> {
-    debug!("reading one by id {}", id);
+    debug!("getting by id {} for user {}", id, user.id);
     secure_get_by_id(&mut conn, id, &user).await
         .map(|app| Json(app.into()))
 }
@@ -47,80 +49,75 @@ async fn get_by_user(mut conn: Connection<AuthDB>, user: User) -> Result<Json<Ve
             .map(|app| app.into())
             .collect::<Vec<OAuthAppDTO>>())),
         Err(e) => {
-            error!("can not get oauth app of user {} - cause {}", user.id, e);
+            error!("can not get oauth app of user {} - cause: {}", user.id, e);
             Err(Status::InternalServerError)
         }
     }
 }
 
 #[put("/<id>", data = "<dto>", format = "application/json")]
-async fn update(mut conn: Connection<AuthDB>, id: i64, user: User, dto: Json<OAuthAppUpdateRequestDTO>) -> Status {
+async fn update(mut conn: Connection<AuthDB>, id: i64, user: User,
+                dto: Json<OAuthAppUpdateRequestDTO<'_>>) -> Result<Status, Status> {
     debug!("updating oauth app {}", id);
-    match secure_get_by_id(&mut conn, id, &user).await {
-        Ok(app) => {
-            let form = OAuthAppUpdateForm {
-                redirect_uri: dto.redirect_uri.to_owned(),
-            };
-            match OAuthApp::update(id, &form, &mut conn).await {
-                Ok(n) if n > 0 => {
-                    info!("user {} has updated oauth app {}", user.id, app.id);
-                    Status::NoContent
-                },
-                Ok(_) => {
-                    warn!("oauth app {} not found", app.id);
-                    Status::NotFound
-                },
-                Err(e) => {
-                    error!("can not update oauth app {} - cause {}", id, e);
-                    Status::InternalServerError
-                }
-            }
+    let app = secure_get_by_id(&mut conn, id, &user).await?;
+    let form = OAuthAppUpdateForm {
+        redirect_uri: dto.redirect_uri,
+    };
+    match OAuthApp::update(app.id, &form, &mut conn).await {
+        Ok(n) if n > 0 => {
+            info!("user {} has updated oauth app {}", user.id, app.id);
+            Ok(Status::NoContent)
         },
-        Err(e) => e
+        Ok(_) => {
+            warn!("oauth app {} not found", app.id);
+            Err(Status::NotFound)
+        },
+        Err(e) => {
+            error!("can not update oauth app {} - cause: {}", app.id, e);
+            Err(Status::InternalServerError)
+        }
     }
 }
 
 #[delete("/<id>")]
-async fn delete(mut conn: Connection<AuthDB>, id: i64, user: User) -> Status {
+async fn delete(mut conn: Connection<AuthDB>, id: i64, user: User) -> Result<Status, Status> {
     debug!("deleting oauth app {}", id);
-    match secure_get_by_id(&mut conn, id, &user).await {
-        Ok(_) => {
-            match OAuthApp::delete(id, &mut conn).await {
-                Ok(n) if n > 0 => {
-                    info!("user {} has deleted oauth app {}", user.id, id);
-                    Status::NoContent
-                },
-                Ok(_) => {
-                    warn!("oauth app {} not found", id);
-                    Status::NotFound
-                },
-                Err(e) => {
-                    error!("can not delete oauth app {} - cause {}", id, e);
-                    Status::InternalServerError
-                }
-            }
+    let app = secure_get_by_id(&mut conn, id, &user).await?;
+    match OAuthApp::delete(app.id, &mut conn).await {
+        Ok(n) if n > 0 => {
+            info!("user {} has deleted oauth app {}", user.id, app.id);
+            Ok(Status::NoContent)
         },
-        Err(e) => e
+        Ok(_) => {
+            warn!("oauth app {} not found", app.id);
+            Err(Status::NotFound)
+        },
+        Err(e) => {
+            error!("can not delete oauth app {} - cause: {}", app.id, e);
+            Err(Status::InternalServerError)
+        }
     }
 }
 
 async fn secure_get_by_id(conn: &mut Connection<AuthDB>, id: i64, user: &User) -> Result<OAuthApp, Status> {
+    trace!("secure getById {} for user {}", id, user.id);
+    let app = try_get_by_id(conn, id).await?;
+    if app.created_by == user.id {
+        info!("user {} is authorized to access oauth app {}", user.id, app.id);
+        Ok(app)
+    } else {
+        warn!("user {} tried to access oauth app {} which belong to user {}", user.id, app.id, app.created_by);
+        Err(Status::Forbidden)
+    }
+}
+
+async fn try_get_by_id(conn: &mut Connection<AuthDB>, id: i64) -> Result<OAuthApp, Status> {
     match OAuthApp::find_by_id(id, conn).await {
-        Ok(opt) => {
-            match opt {
-                Some(app) if app.created_by == user.id => {
-                    Ok(app)
-                },
-                Some(app) => {
-                    warn!("user {} tried to access oauth app {} which belong to user {}", user.id, app.id, app.created_by);
-                    Err(Status::Forbidden)
-                },
-                None => {
-                    warn!("oauth app {} not found", id);
-                    Err(Status::NotFound)
-                }
-            }
-        }
+        Ok(Some(app)) => Ok(app),
+        Ok(None) => {
+            warn!("oauth app {} not found", id);
+            Err(Status::NotFound)
+        },
         Err(e) => {
             error!("can not get oauth app {} - cause {}", id, e);
             Err(Status::InternalServerError)

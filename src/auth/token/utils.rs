@@ -4,65 +4,29 @@ use std::ops::Add;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use josekit::jwe::{A256GCMKW, JweHeader};
 use josekit::jwt::{encode_with_encrypter, JwtPayload};
-use jsonwebtoken::{Algorithm, decode, DecodingKey, encode, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, encode, EncodingKey, Header};
 use rocket::http::Status;
-use rocket::serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use crate::auth::token::{AuthInfo, OAuthAccessToken, OAuthRefreshToken};
 use crate::config::Config;
-use crate::controller::AuthToken;
-use crate::oauth::model::{OAuthCode, OAuthCredential};
+use crate::oauth::model::OAuthCode;
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(crate = "rocket::serde")]
-pub struct AccessToken {
-    pub sub: String,
-    pub exp: u64,
-    pub iat: u64,
-    pub iss: String,
-    pub jti: String,
-}
-
-#[derive(Debug)]
-pub struct RefreshToken {
-    pub sub: String,
-    pub exp: SystemTime,
-    pub iat: SystemTime,
-    pub iss: String,
-    pub jti: String,
-    pub client_id: String,
-    pub correlation_id: String,
-    pub app_id: i64,
-    pub user_id: i64,
-}
-
-#[derive(Debug)]
-pub struct AuthInfo {
-    user_id: i64,
-}
-
-pub fn read_jwt(header: &str, secret: &String) -> Result<AuthToken, String> {
-    let headers = header.split("Bearer ").collect::<Vec<&str>>();
-    if headers.len() != 2 || headers[1].len() == 0 {
-        warn!("Invalid JWT token: {}", header);
-        return Err(String::from("Token not valid!"));
-    }
-    let decode_key = DecodingKey::from_secret(secret.as_ref());
-    let validation = Validation::new(Algorithm::HS512);
-    match decode::<AuthToken>(headers[1], &decode_key, &validation) {
-        Ok(t) => Ok(t.claims),
-        Err(e) => {
-            warn!("Invalid JWT token: {}", e);
-            Err(String::from("Token not valid!"))
-        }
-    }
+macro_rules! unauthorized_if_missing {
+    ($expr:expr) => {
+        $expr.ok_or_else(|| {
+            warn!("missing required field in JWT token");
+            Status::Unauthorized
+        })
+    };
 }
 
 /// Create an access token (JWT) for OAuth2 authorization code or client credentials flow
-pub fn create_oauth2_access_token(auth_info: &AuthInfo,
-                                  config: &Config) -> Result<(String, AccessToken), Status> {
+pub(in crate::auth) fn create_oauth2_access_token(auth_info: &AuthInfo,
+                                                  config: &Config) -> Result<(String, OAuthAccessToken), Status> {
+    trace!("creating oauth2 access token {:?} {:?}", auth_info, config);
     let header = Header::new(Algorithm::ES384);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let claims = AccessToken {
+    let claims = OAuthAccessToken {
         sub: auth_info.user_id.to_string(),
         exp: now + config.oauth_access_token_exp,
         iat: now,
@@ -71,45 +35,52 @@ pub fn create_oauth2_access_token(auth_info: &AuthInfo,
     };
     let sign_key = get_sign_key(config).unwrap();
     let encoding_key = get_encoding_key(&sign_key).map_err(|e| {
-        error!("can not create encoding key for JWT access token - cause: {}", e);
+        error!("can not create encoding key for OAuth2 JWT access token - cause: {}", e);
         Status::InternalServerError
     })?;
     let token = encode(&header, &claims, &encoding_key).map_err(|e| {
-        error!("can not encode JWT access token - cause: {}", e);
+        error!("can not encode OAuth2 JWT access token - cause: {}", e);
         Status::InternalServerError
     })?;
     debug!("encoded token: {}", token);
     Ok((token, claims))
 }
 
-pub fn read_oauth2_refresh_token(token: &str, secret: &str) -> Result<RefreshToken, Status> {
+/// Parse and verify signature of a JWE OAuth2 refresh token encrypted with AES-256 GCM KW
+pub(in crate::auth) fn read_oauth2_refresh_token(token: &str,
+                                                 secret: &str) -> Result<OAuthRefreshToken, Status> {
+    trace!("reading oauth2 refresh token {} {}", token, secret);
     let dec = A256GCMKW.decrypter_from_bytes(secret.as_bytes()).map_err(|e| {
         error!("can not create JWE decrypter - cause: {}", e);
         Status::InternalServerError
     })?;
     let (payload, header) = josekit::jwt::decode_with_decrypter(token, &dec).map_err(|e| {
-        warn!("can not decrypt JWE - cause: {}", e);
+        warn!("can not decrypt OAuth2 JWE refresh token - cause: {}", e);
         Status::Unauthorized
     })?;
-    debug!("refresh token payload: {}", payload);
-    debug!("refresh token header: {}", header);
-    Ok(RefreshToken {
-        sub: payload.subject().unwrap().to_string(),
-        exp: payload.expires_at().unwrap(),
-        iat: payload.issued_at().unwrap(),
-        iss: payload.issuer().unwrap().to_string(),
-        jti: payload.jwt_id().unwrap().to_string(),
-        client_id: payload.claim("client_id").unwrap().as_str().unwrap().to_string(),
-        correlation_id: payload.claim("correlation_id").unwrap().as_str().unwrap().to_string(),
-        user_id: payload.claim("user_id").unwrap().as_i64().unwrap(),
-        app_id: payload.claim("app_id").unwrap().as_i64().unwrap(),
+    debug!("OAuth2 refresh token - header: {} - payload: {}", header, payload);
+    Ok(OAuthRefreshToken {
+        sub: unauthorized_if_missing!(payload.subject())?.to_string(),
+        exp: unauthorized_if_missing!(payload.expires_at())?,
+        iat: unauthorized_if_missing!(payload.issued_at())?,
+        iss: unauthorized_if_missing!(payload.issuer())?.to_string(),
+        jti: unauthorized_if_missing!(payload.jwt_id())?.to_string(),
+        client_id: unauthorized_if_missing!(payload.claim("client_id"))?.as_str()
+            .expect("client_id must be a string").to_string(),
+        correlation_id: unauthorized_if_missing!(payload.claim("correlation_id"))?.as_str()
+            .expect("correlation_id must be a string").to_string(),
+        user_id: unauthorized_if_missing!(payload.claim("user_id"))?.as_i64()
+            .expect("user_id must be an integer"),
+        app_id: unauthorized_if_missing!(payload.claim("app_id"))?.as_i64()
+            .expect("app_id must be an integer"),
     })
 }
 
 /// Create a refresh token (JWE) for OAuth2 authorization code flow
-pub fn create_oauth2_refresh_token(code: Option<&OAuthCode>,
-                                   previous: Option<&RefreshToken>,
-                                   config: &Config) -> Result<(String, RefreshToken), Status> {
+pub(in crate::auth) fn create_oauth2_refresh_token(code: Option<&OAuthCode>,
+                                                   previous: Option<&OAuthRefreshToken>,
+                                                   config: &Config) -> Result<(String, OAuthRefreshToken), Status> {
+    trace!("creating oauth2 refresh token {:?} {:?} {:?}", code, previous, config);
     if code.is_none() && previous.is_none() {
         error!("should specified at lest one between OAuthCode or OAuthRefresh");
         return Err(Status::InternalServerError);
@@ -123,7 +94,7 @@ pub fn create_oauth2_refresh_token(code: Option<&OAuthCode>,
     let user_id = code.map_or_else(|| previous.unwrap().user_id, |c| c.user_id);
     let app_id = code.map_or_else(|| previous.unwrap().app_id, |c| c.app_id);
 
-    let info = RefreshToken {
+    let info = OAuthRefreshToken {
         sub,
         exp,
         iat,
@@ -143,7 +114,7 @@ pub fn create_oauth2_refresh_token(code: Option<&OAuthCode>,
         Status::InternalServerError
     })?;
     let token = encode_with_encrypter(&payload, &header, &enc).map_err(|e| {
-        error!("can not encrypt JWE token - cause: {}", e);
+        error!("can not encrypt OAuth2 JWE refresh token - cause: {}", e);
         Status::InternalServerError
     })?;
     Ok((token, info))
@@ -156,7 +127,7 @@ fn create_oauth2_refresh_token_header() -> JweHeader {
     header
 }
 
-fn create_oauth2_refresh_token_payload(info: &RefreshToken) -> JwtPayload {
+fn create_oauth2_refresh_token_payload(info: &OAuthRefreshToken) -> JwtPayload {
     let mut payload = JwtPayload::new();
     payload.set_subject(&info.sub);
     payload.set_expires_at(&info.exp);
@@ -164,88 +135,43 @@ fn create_oauth2_refresh_token_payload(info: &RefreshToken) -> JwtPayload {
     payload.set_issuer(&info.iss);
     payload.set_jwt_id(&info.jti);
     payload.set_claim("client_id", Some(info.client_id.clone().into()))
-        .expect("Invalid JWT claim!");
+        .expect("Invalid JWT claim: client_id");
     payload.set_claim("correlation_id", Some(info.correlation_id.clone().into()))
-        .expect("Invalid JWT claim!");
+        .expect("Invalid JWT claim: correlation_id");
     payload.set_claim("user_id", Some(info.user_id.into()))
-        .expect("Invalid JWT claim!");
+        .expect("Invalid JWT claim: user_id");
     payload.set_claim("app_id", Some(info.app_id.into()))
-        .expect("Invalid JWT claim!");
+        .expect("Invalid JWT claim: app_id");
     payload
 }
 
+// one day all keys will be managed by a Key Management Service and this code must be removed
 fn get_encoding_key(sign_key: &Vec<u8>) -> Result<EncodingKey, jsonwebtoken::errors::Error> {
     match EncodingKey::from_ec_pem(sign_key) {
         Ok(key) => Ok(key),
         Err(e) => {
-            error!("can not create encoding key - cause {}", e);
+            error!("can not create encoding key - cause: {}", e);
             Err(e)
         }
     }
 }
 
+// one day all keys will be managed by a Key Management Service and this code must be removed
 fn get_sign_key(config: &Config) -> Result<Vec<u8>, Error> {
     match read_sign_key(config) {
         Ok(key) => Ok(key),
         Err(e) => {
-            error!("can not get sign key - cause {}", e);
+            error!("can not get sign key - cause: {}", e);
             Err(e)
         }
     }
 }
 
+// one day all keys will be managed by a Key Management Service and this code must be removed
 fn read_sign_key(config: &Config) -> Result<Vec<u8>, Error> {
     let file = File::open(&config.oauth_jwt_sign_key_path)?;
     let mut reader = BufReader::new(file);
     let mut buffer = Vec::new();
     reader.read_to_end(&mut buffer)?;
     Ok(buffer)
-}
-
-impl From<OAuthCredential> for AuthInfo {
-    fn from(credential: OAuthCredential) -> Self {
-        Self {
-            user_id: credential.user_id,
-        }
-    }
-}
-
-impl From<&OAuthCredential> for AuthInfo {
-    fn from(credential: &OAuthCredential) -> Self {
-        Self {
-            user_id: credential.user_id,
-        }
-    }
-}
-
-impl From<OAuthCode> for AuthInfo {
-    fn from(code: OAuthCode) -> Self {
-        Self {
-            user_id: code.user_id,
-        }
-    }
-}
-
-impl From<&OAuthCode> for AuthInfo {
-    fn from(code: &OAuthCode) -> Self {
-        Self {
-            user_id: code.user_id,
-        }
-    }
-}
-
-impl From<RefreshToken> for AuthInfo {
-    fn from(token: RefreshToken) -> Self {
-        Self {
-            user_id: token.user_id,
-        }
-    }
-}
-
-impl From<&RefreshToken> for AuthInfo {
-    fn from(token: &RefreshToken) -> Self {
-        Self {
-            user_id: token.user_id,
-        }
-    }
 }
