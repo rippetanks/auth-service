@@ -11,6 +11,7 @@ mod database;
 mod web;
 mod users;
 mod auth;
+mod oauth;
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {

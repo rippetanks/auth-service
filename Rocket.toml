@@ -10,9 +10,22 @@ static_dir = "auth-service-web/static/"
 
 [debug]
 jwt_key = "dev_key"
-jwt_exp = 86400
+jwt_exp = 86400 # 24 hours
+oauth_jwt_sign_key_path = "./secrets/ecdsa-pkcs8-private.dev.pem"
+oauth_jwt_encrypt_key = "dev_key_of_length_32_bytes_12345"
+oauth_jwt_issuer = "auth-service-dev"
+oauth_access_token_exp = 300 # 5 minutes
+oauth_refresh_token_absolute_exp = 31536000 # 365 days
+oauth_refresh_token_inactivity_exp = 604800 # 7 days
+oauth_auth_code_exp = 120 # 2 minutes
 
 [debug.databases.auth_db]
 url = "postgres://postgres:postgres@localhost:5432/auth_db"
+
+[debug.databases.oauth_code_db]
+url = "redis://localhost:6379/0"
+
+[debug.databases.oauth_refresh_db]
+url = "redis://localhost:6380/0"
 
 [release]
