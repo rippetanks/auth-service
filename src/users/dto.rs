@@ -23,3 +23,9 @@ impl From<User> for UserDTO {
         }
     }
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(crate = "rocket::serde")]
+pub struct UserUpdatePwdDTO<'r> {
+    pub password: &'r str,
+}

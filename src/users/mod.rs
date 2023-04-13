@@ -4,7 +4,7 @@ use rocket::serde::json::Json;
 use rocket_db_pools::Connection;
 use crate::auth::crypto;
 use crate::database::AuthDB;
-use crate::users::dto::UserDTO;
+use crate::users::dto::{UserDTO, UserUpdatePwdDTO};
 use crate::users::model::{User, UserForm};
 
 pub mod model;
@@ -63,7 +63,7 @@ async fn update(mut conn: Connection<AuthDB>, id: i64, user: User, dto: Json<Use
 }
 
 #[post("/<id>/pwd", data="<dto>", format = "application/json")]
-async fn update_pwd(mut conn: Connection<AuthDB>, id: i64, user: User, dto: Json<UserDTO>) -> Status {
+async fn update_pwd(mut conn: Connection<AuthDB>, id: i64, user: User, dto: Json<UserUpdatePwdDTO<'_>>) -> Status {
     debug!("updating pwd of user {}", id);
     let result = User::find_by_id(id, &mut conn).await;
     match result {
@@ -131,7 +131,7 @@ async fn update_me(mut conn: Connection<AuthDB>, user: User, dto: Json<UserDTO>)
 }
 
 #[post("/me/pwd", data = "<dto>", format = "application/json")]
-async fn update_me_pwd(mut conn: Connection<AuthDB>, user: User, dto: Json<UserDTO>) -> Status {
+async fn update_me_pwd(mut conn: Connection<AuthDB>, user: User, dto: Json<UserUpdatePwdDTO<'_>>) -> Status {
     debug!("update me pwd - user {}", user.id);
     do_update_pwd(&mut conn, &user, user.id, &dto).await
 }
@@ -206,11 +206,8 @@ async fn do_update(conn: &mut Connection<AuthDB>, user: &User, id: i64, dto: &Us
     }
 }
 
-async fn do_update_pwd(conn: &mut Connection<AuthDB>, user: &User, id: i64, dto: &UserDTO) -> Status {
-    if dto.password.is_none() {
-        return Status::BadRequest;
-    }
-    let hashed_pwd = crypto::hash_pwd(dto.password.as_ref().unwrap());
+async fn do_update_pwd(conn: &mut Connection<AuthDB>, user: &User, id: i64, dto: &UserUpdatePwdDTO<'_>) -> Status {
+    let hashed_pwd = crypto::hash_pwd(dto.password);
     match hashed_pwd {
         Some(h) => {
             let form = UserForm {
